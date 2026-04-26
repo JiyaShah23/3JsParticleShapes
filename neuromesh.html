@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://cdn.jsdelivr.net blob: data:; media-src 'self' blob: mediastream:; worker-src 'self' blob:; img-src 'self' data: blob:;" />
+<title>NEUROMESH — Solid Mesh Interface</title>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<style>
+  /* ── Reset & Base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --cyan:   #00ffe7;
+    --purple: #bf00ff;
+    --pink:   #ff0090;
+    --dim:    rgba(0,0,0,0.55);
+    --glass:  rgba(255,255,255,0.04);
+    --border: rgba(0,255,231,0.18);
+    --font-head: 'Orbitron', sans-serif;
+    --font-body: 'Share Tech Mono', monospace;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #050505;
+    overflow: hidden;
+    font-family: var(--font-body);
+    color: var(--cyan);
+    cursor: crosshair;
+  }
+
+  /* ── Canvas ── */
+  #three-canvas {
+    position: fixed; inset: 0;
+    display: block;
+    z-index: 1;
+  }
+
+  /* ── UI Layer ── */
+  #ui {
+    position: fixed; inset: 0;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  /* ── Loading Screen ── */
+  #loading {
+    position: fixed; inset: 0;
+    z-index: 100;
+    background: #050505;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 28px;
+    transition: opacity 0.9s ease;
+  }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+
+  .load-logo {
+    font-family: var(--font-head);
+    font-size: clamp(2rem, 6vw, 4.5rem);
+    font-weight: 900;
+    letter-spacing: 0.22em;
+    background: linear-gradient(135deg, var(--cyan), var(--purple), var(--pink));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: none;
+    animation: pulse-logo 2s ease-in-out infinite;
+  }
+  @keyframes pulse-logo {
+    0%,100%{ filter: brightness(1); }
+    50%    { filter: brightness(1.35); }
+  }
+
+  .load-sub {
+    font-size: 0.78rem;
+    letter-spacing: 0.3em;
+    color: rgba(0,255,231,0.5);
+    text-transform: uppercase;
+  }
+
+  .load-bar-wrap {
+    width: 260px; height: 2px;
+    background: rgba(0,255,231,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .load-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--cyan), var(--purple));
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    box-shadow: 0 0 12px var(--cyan);
+  }
+
+  .load-status {
+    font-size: 0.68rem;
+    letter-spacing: 0.2em;
+    color: rgba(0,255,231,0.38);
+    min-height: 1.2em;
+  }
+
+  /* ── Webcam Preview ── */
+  #cam-wrap {
+    position: absolute;
+    top: 20px; right: 20px;
+    width: 160px; height: 120px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 20px rgba(0,255,231,0.12), inset 0 0 12px rgba(0,0,0,0.5);
+  }
+  #cam-wrap::before {
+    content: 'NEURAL CAM';
+    position: absolute;
+    top: 5px; left: 8px;
+    font-size: 0.52rem;
+    letter-spacing: 0.22em;
+    color: rgba(0,255,231,0.45);
+    z-index: 2;
+  }
+  #cam-preview {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    display: block;
+    opacity: 0.85;
+  }
+
+  .cam-scan {
+    position: absolute; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+    opacity: 0.5;
+    animation: scan-move 2s linear infinite;
+    z-index: 4;
+  }
+  @keyframes scan-move {
+    0%  { top: 0%; }
+    100%{ top: 100%; }
+  }
+
+  /* ── Info Panel ── */
+  #info-panel {
+    position: absolute;
+    bottom: 28px; left: 24px;
+    width: 250px;
+    padding: 18px 20px;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    backdrop-filter: blur(18px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(0,255,231,0.06);
+  }
+  .panel-label {
+    font-size: 0.54rem;
+    letter-spacing: 0.32em;
+    color: rgba(0,255,231,0.4);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .shape-name {
+    font-family: var(--font-head);
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--cyan);
+    text-shadow: 0 0 14px var(--cyan);
+    margin-bottom: 14px;
+    transition: color 0.4s;
+  }
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 10px 0;
+  }
+  .gesture-list { list-style: none; }
+  .gesture-list li {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 0.63rem;
+    letter-spacing: 0.06em;
+    color: rgba(200,255,255,0.55);
+    line-height: 1.6;
+    padding: 2px 0;
+  }
+  .gesture-list li span.icon {
+    font-size: 0.8rem;
+    line-height: 1.5;
+    flex-shrink: 0;
+  }
+  .gesture-list li span.act {
+    color: var(--pink);
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+  }
+
+  /* ── Top Bar ── */
+  #top-bar {
+    position: absolute;
+    top: 18px; left: 24px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .top-logo {
+    font-family: var(--font-head);
+    font-size: 0.95rem;
+    font-weight: 900;
+    letter-spacing: 0.28em;
+    background: linear-gradient(90deg, var(--cyan), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .top-dot {
+    width: 6px; height: 6px;
+    background: var(--cyan);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--cyan);
+    animation: blink 1.4s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  .top-status {
+    font-size: 0.58rem;
+    letter-spacing: 0.22em;
+    color: rgba(0,255,231,0.4);
+    text-transform: uppercase;
+  }
+
+  /* ── HUD ── */
+  #particle-hud {
+    position: absolute;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+  .hud-count {
+    font-family: var(--font-head);
+    font-size: 0.72rem;
+    letter-spacing: 0.22em;
+    color: rgba(191,0,255,0.6);
+  }
+
+  /* ── Gesture Flash ── */
+  #gesture-flash {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: var(--font-head);
+    font-size: clamp(1.4rem, 3vw, 2.4rem);
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    color: var(--pink);
+    text-shadow: 0 0 30px var(--pink), 0 0 60px rgba(255,0,144,0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease;
+    text-transform: uppercase;
+  }
+  #gesture-flash.show { opacity: 1; }
+
+  /* ── Corner Brackets ── */
+  .corner { position: absolute; width: 22px; height: 22px; }
+  .corner.tl { top: 8px; left: 8px; border-top: 1px solid var(--cyan); border-left: 1px solid var(--cyan); }
+  .corner.tr { top: 8px; right: 8px; border-top: 1px solid var(--cyan); border-right: 1px solid var(--cyan); }
+  .corner.bl { bottom: 8px; left: 8px; border-bottom: 1px solid var(--cyan); border-left: 1px solid var(--cyan); }
+  .corner.br { bottom: 8px; right: 8px; border-bottom: 1px solid var(--cyan); border-right: 1px solid var(--cyan); }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="load-logo">NEUROMESH</div>
+  <div class="load-sub">Solid Mesh Mode v2.2</div>
+  <div class="load-bar-wrap"><div class="load-bar" id="load-bar"></div></div>
+  <div class="load-status" id="load-status">Initializing solid renderer…</div>
+</div>
+
+<canvas id="three-canvas"></canvas>
+<video id="webcam-video" autoplay muted playsinline style="position:fixed;top:-9999px;left:-9999px;"></video>
+
+<div id="ui">
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+
+  <div id="top-bar">
+    <div class="top-logo">NEUROMESH</div>
+    <div class="top-dot"></div>
+    <div class="top-status" id="track-status">SCANNING…</div>
+  </div>
+
+  <div id="particle-hud">
+    <div class="hud-count" id="hud-count">SOLID MESH MODE</div>
+  </div>
+
+  <div id="cam-wrap">
+    <video id="cam-preview" autoplay muted playsinline></video>
+    <div class="cam-scan"></div>
+  </div>
+
+  <div id="info-panel">
+    <div class="panel-label">Active Geometry</div>
+    <div class="shape-name" id="shape-name">SPHERE</div>
+    <div class="divider"></div>
+    <div class="panel-label">Gesture Controls</div>
+    <ul class="gesture-list">
+      <li><span class="icon">☝️</span><div><span class="act">INDEX POINT</span><br>Zoom In</div></li>
+      <li><span class="icon">✌️</span><div><span class="act">PEACE SIGN</span><br>Zoom Out</div></li>
+      <li><span class="icon">✋</span><div><span class="act">OPEN HAND</span><br>Expand Mesh</div></li>
+      <li><span class="icon">✊</span><div><span class="act">FIST</span><br>Switch Shape</div></li>
+    </ul>
+  </div>
+
+  <div id="gesture-flash"></div>
+</div>
+
+<script>
+'use strict';
+
+/* ── UI Helpers ── */
+const loadBar = document.getElementById('load-bar');
+const loadStatus = document.getElementById('load-status');
+const gestureFlashEl = document.getElementById('gesture-flash');
+let flashTimer = 0;
+
+function setLoad(pct, msg) {
+  loadBar.style.width = pct + '%';
+  loadStatus.textContent = msg;
+}
+
+function showFlash(text) {
+  gestureFlashEl.textContent = text;
+  gestureFlashEl.classList.add('show');
+  flashTimer = 1.8;
+}
+
+/* ── Three.js Core ── */
+setLoad(10, 'Spinning up Three.js renderer…');
+
+const canvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x050505, 1);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 300);
+camera.position.set(0, 0, 18);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ── Lighting ── */
+const pointLight = new THREE.PointLight(0xbf00ff, 2, 50);
+scene.add(pointLight);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+scene.add(ambientLight);
+
+/* ── Mesh System ── */
+setLoad(25, 'Building solid geometries…');
+
+const meshMaterial = new THREE.MeshPhongMaterial({
+  color: 0x00ffe7,
+  wireframe: true,
+  transparent: true,
+  opacity: 0.8,
+  emissive: 0x00ffe7,
+  emissiveIntensity: 0.4,
+});
+
+const meshGroup = new THREE.Group();
+scene.add(meshGroup);
+
+let activeMesh = null;
+const GEOMETRIES = [
+  new THREE.SphereGeometry(6, 32, 32),
+  new THREE.TorusKnotGeometry(4.5, 1.5, 100, 16),
+  new THREE.TorusGeometry(5, 2, 16, 100),
+  new THREE.IcosahedronGeometry(6, 1),
+  new THREE.BoxGeometry(7, 7, 7)
+];
+const SHAPES = ['SPHERE', 'KNOT', 'TORUS', 'ICO', 'BOX'];
+let currentShapeIdx = 0;
+
+function buildShape(idx) {
+  if (activeMesh) meshGroup.remove(activeMesh);
+  activeMesh = new THREE.Mesh(GEOMETRIES[idx], meshMaterial);
+  meshGroup.add(activeMesh);
+  document.getElementById('shape-name').textContent = SHAPES[idx];
+  showFlash('◈ ' + SHAPES[idx]);
+}
+
+buildShape(0);
+
+/* ── Hand State ── */
+let handPos3D = new THREE.Vector3(0, 0, 0);
+let isOpen = false, isFist = false, isZoomIn = false, isZoomOut = false;
+let handVisible = false;
+let prevFist = false, prevZoom = false;
+let autoSwitchTimer = 0, lastFistTime = -10;
+
+function landmarkDist(a, b) {
+  return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow((a.z||0) - (b.z||0), 2));
+}
+
+function detectGestures(lm) {
+  const handScale = landmarkDist(lm[0], lm[9]) || 0.001;
+  const getExt = (tip) => landmarkDist(lm[tip], lm[0]) / handScale > 1.6;
+  
+  const iExt = getExt(8), mExt = getExt(12), rExt = getExt(16), pExt = getExt(20);
+  const pinch = landmarkDist(lm[4], lm[8]) / handScale < 0.6;
+
+  isZoomIn = iExt && !mExt && !rExt && !pExt;
+  isZoomOut = iExt && mExt && !rExt && !pExt;
+  isFist = !iExt && !mExt && !rExt && !pExt && !pinch;
+  isOpen = iExt && mExt && rExt && pExt;
+
+  handPos3D.set((0.5 - lm[0].x) * 22, (0.5 - lm[0].y) * 16, -lm[0].z * 14);
+}
+
+/* ── MediaPipe ── */
+const videoEl = document.getElementById('webcam-video');
+const camPreview = document.getElementById('cam-preview');
+
+function initMediaPipe() {
+  return new Promise((resolve, reject) => {
+    try {
+      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.45, minTrackingConfidence: 0.45 });
+      hands.onResults((results) => {
+        if (results.multiHandLandmarks?.length > 0) {
+          handVisible = true;
+          detectGestures(results.multiHandLandmarks[0]);
+          document.getElementById('track-status').textContent = 'HAND LOCKED';
+        } else {
+          handVisible = false;
+          isOpen = isFist = isZoomIn = isZoomOut = false;
+          document.getElementById('track-status').textContent = 'SCANNING…';
+        }
+      });
+      const cameraMP = new Camera(videoEl, {
+        onFrame: async () => { await hands.send({ image: videoEl }); },
+        width: 320, height: 240
+      });
+      cameraMP.start().then(() => {
+        camPreview.srcObject = videoEl.srcObject;
+        setLoad(100, 'Ready.');
+        setTimeout(() => document.getElementById('loading').classList.add('hidden'), 800);
+        resolve();
+      }).catch(reject);
+    } catch(e) { reject(e); }
+  });
+}
+
+/* ── Animation Loop ── */
+let camTargetZ = 18, camCurrentZ = 18;
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const time = clock.getElapsedTime();
+
+  autoSwitchTimer += dt;
+  if (autoSwitchTimer > 6 && !isFist) {
+    autoSwitchTimer = 0;
+    currentShapeIdx = (currentShapeIdx + 1) % SHAPES.length;
+    buildShape(currentShapeIdx);
+  }
+
+  if (isFist && !prevFist && (time - lastFistTime) > 1.2) {
+    lastFistTime = time;
+    currentShapeIdx = (currentShapeIdx + 1) % SHAPES.length;
+    buildShape(currentShapeIdx);
+    autoSwitchTimer = 0;
+  }
+  prevFist = isFist;
+
+  if (handVisible) {
+    if (isZoomIn) camTargetZ -= 10 * dt;
+    else if (isZoomOut) camTargetZ += 10 * dt;
+    camTargetZ = THREE.MathUtils.clamp(camTargetZ, 6, 35);
+  }
+  if ((isZoomIn || isZoomOut) && !prevZoom) showFlash(isZoomIn ? '⊕ ZOOM IN' : '⊖ ZOOM OUT');
+  prevZoom = isZoomIn || isZoomOut;
+
+  if (flashTimer > 0) {
+    flashTimer -= dt;
+    if (flashTimer <= 0) gestureFlashEl.classList.remove('show');
+  }
+
+  camCurrentZ += (camTargetZ - camCurrentZ) * 0.06;
+  camera.position.z = camCurrentZ;
+  camera.rotation.y = Math.sin(time * 0.07) * 0.1;
+  camera.rotation.x = Math.cos(time * 0.05) * 0.05;
+
+  if (handVisible) {
+    meshGroup.position.lerp(handPos3D, 0.08);
+    pointLight.position.copy(handPos3D);
+    pointLight.intensity = 2.5;
+  } else {
+    meshGroup.position.lerp(new THREE.Vector3(0, 0, 0), 0.04);
+    pointLight.intensity = 0.5;
+  }
+
+  const targetScale = isOpen && handVisible ? 1.4 : 1.0;
+  meshGroup.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.1);
+  meshGroup.rotation.y += dt * 0.4;
+  meshGroup.rotation.x += dt * 0.2;
+
+  renderer.render(scene, camera);
+}
+
+setLoad(75, 'Launching MediaPipe model…');
+initMediaPipe().catch(() => {
+  setLoad(100, 'Running in demo mode.');
+  setTimeout(() => document.getElementById('loading').classList.add('hidden'), 1200);
+});
+
+animate();
+console.log('Neuromesh Solid v2.2 Loaded');
+</script>
+</body>
+</html>
